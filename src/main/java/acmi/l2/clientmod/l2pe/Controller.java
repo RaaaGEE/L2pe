@@ -93,6 +93,8 @@ public class Controller extends ControllerBase implements Initializable {
     @FXML
     private Button save;
     @FXML
+    private Button copy;
+    @FXML
     private CheckMenuItem showAllProperties;
     @FXML
     private PropertiesEditor properties;
@@ -259,6 +261,7 @@ public class Controller extends ControllerBase implements Initializable {
         });
         entryMenu.disableProperty().bind(entrySelected().not());
         save.visibleProperty().bind(entrySelected());
+        copy.visibleProperty().bind(Bindings.createBooleanBinding(() -> canCopy(getObject()), objectProperty()));
 
         loading.setVisible(false);
     }
@@ -476,6 +479,59 @@ public class Controller extends ControllerBase implements Initializable {
 
             showException("Couldn't save entry", e);
         });
+    }
+
+    private static boolean canCopy(Object object) {
+        return object != null;
+    }
+
+    public void copy() {
+        if (!isEntrySelected())
+            return;
+
+        UnrealPackage.ExportEntry selected = getSelectedItem(entrySelector);
+
+        if (selected == null)
+            return;
+
+        Object object = getObject();
+        if (!canCopy(object))
+            return;
+
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Copy export entry");
+        dialog.setHeaderText(null);
+        dialog.setContentText("New name:");
+        dialog.showAndWait().ifPresent(name -> execute(() -> {
+            try (UnrealPackage up = new UnrealPackage(getUnrealPackage().getFile().openNewSession(false))) {
+                up.addExportEntry(name,
+                        Optional.ofNullable(selected.getObjectClass()).map(UnrealPackage.Entry::getObjectFullName).orElse(null),
+                        Optional.ofNullable(selected.getObjectSuperClass()).map(UnrealPackage.Entry::getObjectFullName).orElse(null),
+                        new byte[]{},
+                        selected.getObjectFlags());
+                UnrealPackage.ExportEntry newEntry = up.getExportTable().get(up.getExportTable().size() - 1);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream(object.entry.getSize());
+                PropertiesUtil.removeDefaults(object.properties, newEntry.getObjectClass() == null ? newEntry.getObjectSuperClass().getObjectFullName() : newEntry.getFullClassName(), getSerializerFactory(), selected.getUnrealPackage());
+                new ObjectOutputStream<>(baos,
+                        up.getFile().getCharset(),
+                        getSerializerFactory(),
+                        new UnrealRuntimeContext(newEntry, getSerializerFactory()))
+                        .write(object);
+                newEntry.setObjectRawData(baos.toByteArray());
+
+                getEnvironment().markInvalid(up.getPackageName());
+            }
+
+            Platform.runLater(() -> {
+                int selectedPackage = packageSelector.getSelectionModel().getSelectedIndex();
+                packageSelector.getSelectionModel().clearSelection();
+                packageSelector.getSelectionModel().select(selectedPackage);
+            });
+        }, e -> {
+            log.log(Level.SEVERE, e, () -> "Couldn't copy entry");
+
+            showException("Couldn't copy entry", e);
+        }));
     }
 
     public void exportProperties() {
